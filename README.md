@@ -4,6 +4,33 @@
 
 ---
 
+## Contents
+
+- [What This Builds](#what-this-builds)
+- [MVP Scope](#mvp-scope)
+- [Software Architecture](#software-architecture)
+- [Tech Stack](#tech-stack)
+- [Pipeline: Step by Step](#pipeline-step-by-step)
+  - [Step 1 — DICOM Upload](#step-1--dicom-upload)
+  - [Step 2 — DICOM → NIfTI Conversion](#step-2--dicom--nifti-conversion-simpleitk)
+  - [Step 3 — Segmentation via MONAI Deploy + TotalSegmentator](#step-3--segmentation-via-monai-deploy--totalsegmentator)
+  - [Step 4 — Structure Extraction](#step-4--structure-extraction-post-processing)
+  - [Step 5 — Output: NIfTI Mask](#step-5--output-nifti-mask)
+- [API Reference](#api-reference)
+  - [GET /structures](#get-structures)
+  - [POST /segment](#post-segment)
+- [Repository Structure](#repository-structure)
+- [Local Setup](#local-setup)
+  - [Prerequisites](#prerequisites)
+  - [Run with Docker](#run-with-docker)
+  - [Run without Docker (dev)](#run-without-docker-dev)
+  - [Test the Pipeline](#test-the-pipeline)
+- [Output Format Notes](#output-format-notes)
+- [Post-MVP Roadmap](#post-mvp-roadmap)
+- [References](#references)
+
+---
+
 ## What This Builds
 
 OrthoCloud MVP is a backend API that accepts a CT scan (multi-slice DICOM), runs automated anatomical segmentation using TotalSegmentator (deployed as a MONAI Deploy App), and returns a NIfTI mask (`.nii.gz`) for the selected structure — e.g. the right femur. The mask opens natively in 3D Slicer as a label map, with the option to generate a surface mesh inside Slicer in one click.
