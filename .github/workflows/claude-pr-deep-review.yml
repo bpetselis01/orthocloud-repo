@@ -18,12 +18,12 @@ on:
 
 jobs:
   claude-deep-review:
-    # Step 2: Only run when @claude is mentioned, or when manually dispatched
+    # Step 2: Only run when "@claude deep" is mentioned, or when manually dispatched
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude deep')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude deep')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude deep'))
 
     # Step 3: Spin up a fresh Linux VM
     runs-on: ubuntu-latest

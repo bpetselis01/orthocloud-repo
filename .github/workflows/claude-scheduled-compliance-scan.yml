@@ -15,13 +15,13 @@ on:
 
 jobs:
   claude-compliance-scan:
-    # Step 2: Only run when @claude is mentioned, or when manually dispatched
+    # Step 2: Only run when "@claude compliance" is mentioned, or when manually dispatched
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
 
     # Step 3: Spin up a fresh Linux VM
     runs-on: ubuntu-latest
