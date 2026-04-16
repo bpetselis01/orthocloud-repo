@@ -26,6 +26,7 @@
   - [Run without Docker (dev)](#run-without-docker-dev)
   - [Test the Pipeline](#test-the-pipeline)
 - [Output Format Notes](#output-format-notes)
+- [Regulatory Context](#regulatory-context)
 - [Post-MVP Roadmap](#post-mvp-roadmap)
 - [References](#references)
 
@@ -374,16 +375,53 @@ curl -X POST http://localhost:8000/segment \
 
 ---
 
+## Regulatory Context
+
+OrthoCloud is a **Software as a Medical Device (SaMD) — Class IIa workflow tool** in all three target markets (AU, US, EU). Segmentation output is reviewed by a clinician before any clinical decision — this classification avoids the highest-risk regulatory pathways.
+
+| Jurisdiction | Authority | Clearance Path | Key Privacy Law |
+|---|---|---|---|
+| Australia | TGA | ARTG Class IIa | Privacy Act 1988 (APPs) |
+| United States | FDA | 510(k) premarket notification | HIPAA |
+| European Union | Notified Body | MDR CE marking | GDPR |
+
+**Phase 1.5 (current):** No real patient data is used. De-identified or synthetic CT only. No regulatory obligations are triggered.
+
+**Phase 2 (cloud):** Requires AWS BAA signed per account, multi-region data isolation architecture, and concurrent regulatory submissions. ISO 13485 QMS must be established before any submission can be accepted. See the research vault (`research_orthocloud/regulations/`) for the full regulatory analysis.
+
+---
+
 ## Post-MVP Roadmap
+
+### Product Features
 
 | Phase | Feature | Key Technology |
 |---|---|---|
 | 2 | STL mesh output from segmentation mask | VTK marching cubes (Python `vtk` package) |
 | 2 | Swap to VISTA3D for MONAI-native inference | MONAI VISTA3D (127 classes, class-prompt mode) |
+| 2 | Asynchronous segmentation jobs (polling) | SQS + ECS worker |
 | 3 | Interactive mask refinement in browser | nnInteractive + slicer-nninteractive extension |
 | 3 | Cloud-hosted 3D Slicer viewer | trame-slicer (Kitware) |
 | 4 | DICOM PACS integration | MONAI Deploy DICOM operators |
-| 4 | GPU autoscaling | NVIDIA MONAI Cloud API |
+| 4 | GPU autoscaling | NVIDIA MONAI Cloud API / ECS autoscaling |
+
+### Regulatory and Compliance Milestones
+
+| Phase | Milestone | Notes |
+|---|---|---|
+| 2 | Establish AWS multi-account structure (AU/EU/US) | One account per region; very expensive to retrofit later |
+| 2 | Sign AWS BAA per account (via AWS Artifact) | Required before any real PHI is ingested |
+| 2 | DICOM PS3.15 de-identification pipeline | Required before training on any real data |
+| 2 | Implement CloudTrail + S3 Object Lock audit logging | HIPAA; 21 CFR Part 11; GDPR |
+| 2 | Automate SBOM generation (Syft) and CVE scanning (Grype) | FDA/TGA 2023 cybersecurity guidance |
+| 2 | Begin ISO 13485 QMS (engage regulatory consultant) | Blocks all three clearance pathways — start early |
+| 2 | Begin IEC 62304 software lifecycle documentation | Required for 510(k), ARTG, and MDR technical files |
+| 2 | Begin SOC 2 Type II observation period | 6–12 month observation required before audit |
+| 2 | File ARTG application (TGA) — concurrent with development | Allow 3–12 months from submission to registration |
+| 2 | File 510(k) premarket notification (FDA) + PCCP | Q-Sub meeting with FDA DiHCoE first; design PCCP early |
+| 2/3 | Engage EU Notified Body for CE marking | 18–36 month process; start concurrent with Phase 2 |
+| 3 | Obtain product liability and professional indemnity insurance | Required before any clinical pilot deployment |
+| 3 | SOC 2 Type II audit | Required for enterprise hospital sales |
 
 ---
 
