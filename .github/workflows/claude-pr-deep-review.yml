@@ -1,0 +1,66 @@
+name: Claude PR Deep Review
+
+# Step 1: Listen for @claude mentions in PR comments and reviews,
+# or run manually from the Actions UI with a specific PR number
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+jobs:
+  claude-deep-review:
+    # Step 2: Only run when @claude is mentioned, or when manually dispatched
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+
+    # Step 3: Spin up a fresh Linux VM
+    runs-on: ubuntu-latest
+
+    # Step 4: Write access to PRs so Claude can post the full structured review
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      # Step 5: Fetch the repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Step 6: Resolve which PR to review
+      # Manual dispatch supplies it as input; comment triggers use the issue number
+      - name: Resolve PR number
+        id: pr-number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      # Step 7: Run the full pr-review-toolkit against the resolved PR
+      # Automatically invokes: silent-failure-hunter, pr-test-analyzer,
+      # type-design-analyzer, and comment-analyzer in a single pass
+      - name: Run Claude PR Deep Review
+        id: claude-deep-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'pr-review-toolkit@claude-code-plugins'
+          prompt: '/pr-review-toolkit:review-pr ${{ github.repository }}/pull/${{ steps.pr-number.outputs.number }}'
