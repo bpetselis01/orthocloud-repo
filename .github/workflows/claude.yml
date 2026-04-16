@@ -1,5 +1,7 @@
 name: Claude Code
 
+# Step 1: Listen for events where someone mentions @claude
+# Covers: comments on issues, comments on PRs, PR reviews, and new issues
 on:
   issue_comment:
     types: [created]
@@ -12,39 +14,38 @@ on:
 
 jobs:
   claude:
+    # Step 2: Only run if the comment/issue actually contains "@claude"
+    # Prevents Claude from firing on every single comment
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+
+    # Step 3: Spin up a fresh Linux VM to run Claude in
     runs-on: ubuntu-latest
+
+    # Step 4: Grant read-only access to the repo, PRs, issues, and CI results
     permissions:
       contents: read
       pull-requests: read
       issues: read
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read
     steps:
+      # Step 5: Download the repo code onto the VM
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # Step 6: Run Claude — it reads the comment that tagged it and responds accordingly
+      # Uses the OAuth token secret to authenticate Claude to this repo
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
 
