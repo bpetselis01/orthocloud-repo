@@ -1,25 +1,36 @@
+# Step 1: Workflow name — shown in the GitHub Actions UI
 name: CI
 
+# Step 2: Trigger — run this workflow on every pull request targeting develop
+# This ensures no unreviewed code reaches the integration branch without passing checks
 on:
   pull_request:
     branches: [develop]
 
 jobs:
   test-and-lint:
+    # Step 3: Runner — use the latest Ubuntu GitHub-hosted runner
     runs-on: ubuntu-latest
     steps:
+      # Step 4: Check out the repository so subsequent steps can access the source
       - uses: actions/checkout@v4
 
+      # Step 5: Install the exact Python version used in production (matches Dockerfile)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # Step 6: Install all pinned dependencies from the backend requirements file
       - name: Install dependencies
         run: pip install -r backend/requirements.txt
 
+      # Step 7: Lint — ruff checks style and import order across the backend package
+      # Fails the build if any violations are found, keeping the codebase consistent
       - name: Lint with ruff
         run: ruff check backend/
 
+      # Step 8: Run the test suite
+      # PYTHONPATH=backend lets pytest resolve "from app.main import app" without installing the package
       - name: Run tests
         run: pytest tests/
         env:

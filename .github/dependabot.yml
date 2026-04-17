@@ -1,7 +1,15 @@
+# Step 1: Dependabot config schema version — version 2 is required for ecosystem-based updates
 version: 2
+
 updates:
+  # Step 2: Watch the pip ecosystem (Python packages) inside /backend
+  # Dependabot reads backend/requirements.txt and opens PRs when newer versions are available
   - package-ecosystem: pip
     directory: /backend
+
+    # Step 3: Check for updates every week — balances staying current without PR noise
     schedule:
       interval: weekly
+
+    # Step 4: Cap open PRs at 5 to avoid flooding the repository with dependency updates
     open-pull-requests-limit: 5
