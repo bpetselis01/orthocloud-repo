@@ -1,0 +1,38 @@
+# Step 1: Compose file version
+# Version 3.8 supports all features needed for local dev and is compatible
+# with Docker Desktop on Windows, Mac, and Linux
+version: "3.8"
+
+services:
+
+  # Step 2: Backend service — FastAPI app
+  # Builds from backend/Dockerfile and mounts source for live reload
+  # Port 8000 is exposed so you can hit http://localhost:8000/docs locally
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Step 3: Mount source code for live reload during development
+      # Changes to backend/app/ are reflected immediately without rebuilding
+      - ./backend:/app
+    environment:
+      # Step 4: Inject environment variables from .env file
+      # Copy .env.example to .env and fill in values before running
+      - APP_ENV=${APP_ENV:-development}
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8000}
+      - TEMP_DIR=${TEMP_DIR:-/tmp/orthocloud}
+    env_file:
+      - .env
+
+  # Step 5: GPU inference service placeholder (Phase 2)
+  # TotalSegmentator via MONAI Deploy will run here in Step 3
+  # Uncomment and configure when implementing segmentation
+  # gpu-inference:
+  #   image: placeholder
+  #   runtime: nvidia
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
