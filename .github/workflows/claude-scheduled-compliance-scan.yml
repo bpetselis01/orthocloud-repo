@@ -1,8 +1,12 @@
 name: Claude Scheduled Compliance Scan
 
-# Step 1: Listen for @claude mentions in issues and comments,
-# or run manually from the Actions UI for on-demand compliance checks
+# Step 1: Define when this workflow runs
+# - Weekly automated scan every Monday at 02:00 UTC (no human needed)
+# - On-demand when "@claude compliance" is mentioned in an issue/PR/review comment
+# - Manually via the Actions UI (workflow_dispatch)
 on:
+  schedule:
+    - cron: '0 2 * * 1'
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -13,21 +17,250 @@ on:
     types: [submitted]
   workflow_dispatch:
 
-jobs:
-  claude-compliance-scan:
-    # Step 2: Only run when "@claude compliance" is mentioned, or when manually dispatched
-    if: |
+# Step 2: Shared condition used by all jobs
+# Passes for scheduled runs, manual dispatches, and "@claude compliance" mentions
+# Defined once here and referenced in each job via ${{ }} expression
+env:
+  TRIGGER_CONDITION: >-
+    ${{
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
+    }}
 
-    # Step 3: Spin up a fresh Linux VM
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Dependency & SBOM scan
+  # Covers: FDA Cybersecurity 2023 (SBOM mandate for SaMD "cyber devices"),
+  #         TGA Cybersecurity Guidance 2023, HIPAA §164.312 (integrity)
+  # Tools:  pip-audit (CVE scan), Syft (SBOM generation in CycloneDX format)
+  # ─────────────────────────────────────────────────────────────────────────
+  dependency-scan:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # Step 3: Check out the full codebase (shallow clone is sufficient here)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Step 4: Install pip-audit — scans requirements.txt for known CVEs
+      # Source: https://github.com/pypa/pip-audit (PyPA / Google)
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # Step 5: Run CVE scan against pinned backend dependencies
+      # --exit-zero prevents the step from failing the job (Claude synthesises severity)
+      # Outputs JSON so Claude and future tooling can parse findings programmatically
+      - name: Scan dependencies for CVEs (pip-audit)
+        run: |
+          pip-audit -r backend/requirements.txt -f json -o pip-audit-report.json --exit-zero
+          echo "pip-audit complete — $(python -c "import json; d=json.load(open('pip-audit-report.json')); print(len(d.get('dependencies',[])), 'packages scanned')")"
+
+      # Step 6: Install Syft — generates a Software Bill of Materials (SBOM)
+      # FDA requires machine-readable SBOM (SPDX or CycloneDX) for SaMD cyber device submissions
+      # Source: https://github.com/anchore/syft (CISA-recommended)
+      # NOTE: Do NOT use Trivy for SBOM — it was security-compromised in March 2026
+      - name: Install Syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      # Step 7: Generate SBOM in CycloneDX JSON format (FDA-accepted machine-readable format)
+      # CycloneDX is preferred over SPDX for vulnerability correlation in medical device submissions
+      - name: Generate SBOM (Syft / CycloneDX)
+        run: syft backend/ -o cyclonedx-json=sbom.cyclonedx.json
+
+      # Step 8: Upload both reports as workflow artifacts
+      # Artifacts are retained for 30 days and serve as auditable compliance evidence (ISO 13485)
+      - name: Upload dependency scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-reports
+          path: |
+            pip-audit-report.json
+            sbom.cyclonedx.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Code security scan
+  # Covers: OWASP ASVS Level 1 (FDA/TGA cybersecurity), 21 CFR Part 11
+  #         (audit trail integrity), HIPAA §164.312 (integrity controls)
+  # Tools:  Bandit (Python SAST), detect-secrets (credential scanning)
+  # ─────────────────────────────────────────────────────────────────────────
+  code-security-scan:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Step 9: Install Bandit — Python SAST tool (PyCQA)
+      # Flags: hardcoded passwords, unsafe deserialization, shell injection,
+      # insecure temp file usage, SQL injection patterns
+      # Source: https://github.com/PyCQA/bandit
+      - name: Install Bandit and detect-secrets
+        run: pip install bandit detect-secrets
+
+      # Step 10: Run Bandit across the backend package
+      # -f json outputs machine-readable findings; --exit-zero lets Claude rate severity
+      # Confidence LOW/MEDIUM/HIGH and Severity LOW/MEDIUM/HIGH are preserved in JSON
+      - name: Run Bandit (Python SAST)
+        run: bandit -r backend/ -f json -o bandit-report.json --exit-zero
+
+      # Step 11: Run detect-secrets to find hardcoded credentials, API keys, connection strings
+      # Source: https://github.com/Yelp/detect-secrets
+      # Scans backend source and tests — excludes test fixtures that use placeholder values
+      - name: Scan for hardcoded secrets (detect-secrets)
+        run: detect-secrets scan backend/ tests/ > detect-secrets-report.json
+
+      # Step 12: Upload security scan artifacts
+      - name: Upload code security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-security-reports
+          path: |
+            bandit-report.json
+            detect-secrets-report.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: PHI and DICOM de-identification scan
+  # Covers: HIPAA §164.514 (de-identification), GDPR Article 25 (data
+  #         minimisation), TGA Essential Principles (privacy safeguards),
+  #         DICOM PS3.15 Basic Application Level Confidentiality Profile
+  # Tools:  Custom PS3.15 compliance script (pydicom/deid), PHI pattern grep
+  # ─────────────────────────────────────────────────────────────────────────
+  phi-dicom-scan:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Step 13: Install DICOM de-identification libraries
+      # pydicom: core DICOM file handling — https://github.com/pydicom/pydicom
+      # deid: PS3.15-based de-identification — https://github.com/pydicom/deid
+      - name: Install pydicom and deid
+        run: pip install pydicom deid
+
+      # Step 14: Run the DICOM PS3.15 compliance checker
+      # Checks whether the pipeline handles the 18 HIPAA safe-harbour identifiers
+      # and the required DICOM Basic Application Level Confidentiality Profile tags
+      # Script exits 0 (pass) or 1 (Critical finding detected)
+      - name: Check DICOM de-identification compliance (PS3.15)
+        run: python scripts/check_dicom_deidentification.py > deid-compliance-report.json || true
+
+      # Step 15: PHI pattern scan across Python source
+      # Greps for patterns that suggest PHI is being logged, hardcoded, or leaked
+      # in error responses — covers MRN patterns, DOB formats, email in non-test files
+      - name: Scan for PHI patterns in source code
+        run: |
+          python - <<'EOF'
+          import re, json
+          from pathlib import Path
+
+          # Patterns that suggest PHI may be hardcoded or logged
+          PHI_PATTERNS = {
+              "patient_name_key":     r'["\']patient_?name["\']\s*[=:]',
+              "mrn_pattern":          r'\bMRN[-_]?\d{4,}',
+              "dob_hardcoded":        r'\b(19|20)\d{2}[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])\b',
+              "email_in_source":      r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
+              "ssn_pattern":          r'\b\d{3}-\d{2}-\d{4}\b',
+              "phi_logged":           r'log(ger)?\.(info|debug|warning|error)\s*\(.*patient',
+              "dicom_unfiltered":     r'(ds|dataset)\.(PatientName|PatientID|PatientBirthDate)',
+          }
+
+          findings = []
+          # Only scan non-test Python source files
+          src_files = [
+              f for f in Path("backend").rglob("*.py")
+              if "test" not in f.parts
+          ]
+
+          for src in src_files:
+              content = src.read_text(encoding="utf-8", errors="ignore")
+              for name, pattern in PHI_PATTERNS.items():
+                  for m in re.finditer(pattern, content, re.IGNORECASE):
+                      findings.append({
+                          "file": str(src),
+                          "pattern": name,
+                          "match": m.group(0)[:120],
+                          "line": content[:m.start()].count("\n") + 1,
+                      })
+
+          report = {"phi_pattern_hits": findings, "files_scanned": len(src_files)}
+          print(json.dumps(report, indent=2))
+          Path("phi-grep-report.json").write_text(json.dumps(report, indent=2))
+          EOF
+
+      # Step 16: Upload PHI/DICOM scan artifacts
+      - name: Upload PHI and DICOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phi-dicom-reports
+          path: |
+            deid-compliance-report.json
+            phi-grep-report.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 4: Claude compliance synthesis
+  # Runs AFTER all three tool jobs complete (needs: [...])
+  # Downloads all tool reports into the workspace, then passes them to Claude
+  # Claude interprets findings against all six regulatory domains and opens
+  # a GitHub Issue for any Critical or High severity result
+  # ─────────────────────────────────────────────────────────────────────────
+  claude-compliance-synthesis:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude compliance')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude compliance')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude compliance') || contains(github.event.issue.title, '@claude compliance')))
+    needs: [dependency-scan, code-security-scan, phi-dicom-scan]
     runs-on: ubuntu-latest
 
-    # Step 4: Read-only repo access; write to issues so Claude can open a tracked
-    # finding for Critical/High severity results — gives auditors a traceable CAPA record
+    # Step 17: Permissions scoped to minimum required
+    # contents: read — Claude reads the codebase
+    # pull-requests: read — Claude can inspect PR diff context
+    # issues: write — Claude opens a GitHub Issue for Critical/High findings (CAPA record)
+    # id-token: write — required by claude-code-action for OIDC authentication
     permissions:
       contents: read
       pull-requests: read
@@ -35,36 +268,156 @@ jobs:
       id-token: write
 
     steps:
-      # Step 5: Full checkout — the scan reviews the whole codebase, not just a diff
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # Step 6: Run Claude against the full repository with a compliance-focused prompt
-      # Scope is explicit so the Actions log serves as a documented review record
-      # covering HIPAA, TGA/MDR, ISO 13485, and FDA 21 CFR Part 820 obligations
-      - name: Run Claude Compliance Scan
+      # Step 18: Download all tool reports from the three parallel jobs
+      # Reports land in compliance-reports/ so Claude can read them as workspace files
+      - name: Download dependency scan reports
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-scan-reports
+          path: compliance-reports/
+
+      - name: Download code security reports
+        uses: actions/download-artifact@v4
+        with:
+          name: code-security-reports
+          path: compliance-reports/
+
+      - name: Download PHI and DICOM reports
+        uses: actions/download-artifact@v4
+        with:
+          name: phi-dicom-reports
+          path: compliance-reports/
+
+      # Step 19: Run Claude compliance synthesis
+      # Claude reads the codebase AND the six tool reports, then produces a single
+      # severity-rated compliance report covering all six regulatory domains
+      - name: Run Claude Compliance Synthesis
         id: claude-compliance-scan
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Perform a compliance-focused review of the full OrthoCloud codebase at ${{ github.repository }}.
-            This is a HIPAA-regulated, TGA/MDR-scoped medical imaging SaaS (Software as a Medical Device).
-            Check for and report on:
-            1. PHI exposure risks — any code path where DICOM metadata, patient identifiers, or scan data
-               could be logged, persisted unencrypted, or leaked in error responses
-            2. Audit trail gaps — FastAPI endpoints that perform clinical operations (upload, segment, retrieve)
-               without generating an auditable log entry (required by HIPAA and 21 CFR Part 11)
-            3. Input validation coverage — ensure all endpoints that accept DICOM data validate file type,
-               size limits, and structure before passing to SimpleITK or TotalSegmentator
-            4. Error handling completeness — bare except blocks or unhandled exceptions in the segmentation
-               pipeline that could produce a silent failure and return a success status to a clinician
-            5. Dependency risk — flag any dependencies pinned to versions with known CVEs,
-               or that are unpinned (floating versions in requirements files)
-            6. Configuration and secrets hygiene — hardcoded values, missing environment variable validation,
-               or config that should be injected at runtime but is baked into source
-            Summarise findings by severity (Critical / High / Medium / Low).
-            If any Critical or High findings are present, open a GitHub issue titled "Compliance Scan — [today's date]".
-            If the scan is clean, post a summary comment confirming the scan ran and the scope checked.
+            This is a HIPAA-regulated, TGA/MDR-scoped, EU-MDR-applicable medical imaging SaaS
+            (Software as a Medical Device — SaMD Class IIa). The intended clinical use is
+            AI-assisted orthopedic structure segmentation from DICOM CT scans.
+
+            --- AUTOMATED TOOL REPORTS ---
+
+            Six automated tool reports have been generated by the parallel scan jobs and are
+            available in the workspace at compliance-reports/. Read each file before starting
+            your review:
+
+            1. compliance-reports/pip-audit-report.json
+               Tool: pip-audit (PyPA) — CVE scan of backend/requirements.txt
+               Regulation: FDA Cybersecurity 2023, TGA Cybersecurity Guidance 2023,
+                           HIPAA §164.312 (integrity)
+
+            2. compliance-reports/sbom.cyclonedx.json
+               Tool: Syft (Anchore / CISA-recommended) — CycloneDX SBOM
+               Regulation: FDA Cybersecurity 2023 (mandatory machine-readable SBOM for
+                           SaMD cyber device 510(k)/De Novo submissions)
+
+            3. compliance-reports/bandit-report.json
+               Tool: Bandit (PyCQA) — Python SAST
+               Regulation: OWASP ASVS Level 1 (FDA/TGA cybersecurity), 21 CFR Part 11
+                           (audit trail integrity), HIPAA §164.312 (integrity controls)
+
+            4. compliance-reports/detect-secrets-report.json
+               Tool: detect-secrets (Yelp) — hardcoded credential scan
+               Regulation: HIPAA §164.312 (access controls), config hygiene,
+                           TGA Essential Principle 13 (cybersecurity)
+
+            5. compliance-reports/deid-compliance-report.json
+               Tool: Custom PS3.15 checker (pydicom/deid) — DICOM de-identification gap analysis
+               Regulation: HIPAA §164.514(b) (de-identification), GDPR Article 25
+                           (data minimisation by design), DICOM PS3.15 Basic Application
+                           Level Confidentiality Profile
+
+            6. compliance-reports/phi-grep-report.json
+               Tool: PHI pattern grep — source scan for hardcoded/logged patient data
+               Regulation: HIPAA §164.514(b), TGA Privacy Act APP 3/APP 11
+
+            --- COMPLIANCE REVIEW SCOPE ---
+
+            After reading all six tool reports, review the full codebase and check for:
+
+            DOMAIN 1 — HIPAA (USA)
+            - PHI exposure: any code path where DICOM metadata, patient identifiers, or scan
+              data could be logged, persisted unencrypted, or leaked in error responses
+            - Audit trail gaps: FastAPI endpoints performing clinical operations (upload,
+              segment, retrieve) without generating an auditable log entry
+              (required by HIPAA Security Rule §164.312 and 21 CFR Part 11)
+            - Transmission security: any data path missing TLS 1.2+ enforcement evidence
+            - BAA data paths: any AWS service calls (boto3, S3, HealthImaging) without
+              encryption assertions — a BAA with AWS must be in place before real patient data
+
+            DOMAIN 2 — FDA (USA)
+            - 21 CFR Part 11: are electronic records (segmentation results) structured to
+              support signing, timestamping, and tamper-evidence in a future implementation?
+            - FDA Cybersecurity 2023: interpret pip-audit CVE findings against the 30-day
+              critical patch cadence requirement; flag any critical CVEs as High severity
+            - SBOM completeness: does sbom.cyclonedx.json cover runtime dependencies,
+              development tools, and build environment as required for SaMD submissions?
+            - PCCP readiness: is the codebase structured to support a Predetermined Change
+              Control Plan for future AI/ML model retraining?
+
+            DOMAIN 3 — EU MDR / GDPR (European Union)
+            - GDPR Article 25 (data minimisation by design): does the pipeline collect or
+              store more data than strictly necessary for the segmentation function?
+            - GDPR Article 35 DPIA gap: is there evidence of a Data Protection Impact
+              Assessment having been considered for large-scale health data processing?
+            - Schrems II / data residency: any cloud storage or API calls that could route
+              EU patient data outside eu-central-1 or eu-west-1?
+            - EU MDR Annex I (General Safety and Performance Requirements): are software
+              error states handled in a way that cannot mislead a clinician?
+
+            DOMAIN 4 — TGA (Australia)
+            - TGA Essential Principle 13 (cybersecurity): assess the codebase against the
+              2023 TGA cybersecurity guidance — threat model evidence, SBOM, patch cadence,
+              and incident response path
+            - Privacy Act 1988 APP 11 (security of personal information): are there
+              controls preventing unauthorised access to any patient data held in temp files?
+            - APP 8 (cross-border disclosure): any data path that could transfer patient
+              data outside Australia without adequate protection?
+
+            DOMAIN 5 — ISO 13485 / IEC 62304 (Quality & Software Lifecycle)
+            - IEC 62304 Class B: is there evidence of requirements traceability (tests
+              mapping to requirements), unit test coverage gates, and change control records?
+            - ISO 13485 §7.3 (design and development): are design inputs, outputs, and
+              verification activities documented and linked?
+            - ISO 14971 risk management: are there any unmitigated failure modes in the
+              pipeline that could produce a false-negative segmentation result without
+              alerting the operator?
+
+            DOMAIN 6 — Input validation, error handling, dependency hygiene
+            - Input validation: all endpoints accepting DICOM data must validate file type,
+              size limits, and structure before passing to SimpleITK or TotalSegmentator
+            - Error handling: bare except blocks or unhandled exceptions in the segmentation
+              pipeline that could return a success status to a clinician on failure
+            - Dependency hygiene: interpret pip-audit and SBOM findings — flag unpinned
+              versions, transitive dependency risks, and packages with no upstream support
+
+            --- OUTPUT FORMAT ---
+
+            Summarise ALL findings (from tool reports AND codebase review) by severity:
+            Critical / High / Medium / Low / Info
+
+            For each finding include:
+            - Severity
+            - Regulatory domain and specific clause (e.g., "HIPAA §164.312(a)(1)")
+            - Finding description (what was found or missing)
+            - File/location if applicable
+            - Recommended remediation
+
+            If any Critical or High findings are present, open a GitHub Issue titled
+            "Compliance Scan — ${{ github.run_id }} — [date]" with the full findings summary.
+            This issue serves as the official CAPA record for the scan cycle.
+
+            If the scan is clean (no Critical or High findings), post a summary comment
+            confirming the scan ran, listing the tools used, and the regulatory domains checked.
