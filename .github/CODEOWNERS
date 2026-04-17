@@ -1,0 +1,11 @@
+# CODEOWNERS — GitHub uses this file to automatically request reviews
+# when a pull request touches files matching a path pattern.
+# The last matching pattern wins if multiple patterns match a file.
+
+# Step 1: Require @bpetselis01 to review any change inside backend/
+# This covers all Python source, Dockerfile, and requirements changes
+backend/ @bpetselis01
+
+# Step 2: Require @bpetselis01 to review any change to GitHub config
+# This prevents CI, Dependabot, or CODEOWNERS itself from being modified without review
+.github/ @bpetselis01

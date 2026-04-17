@@ -1,0 +1,22 @@
+# Step 1: Web framework and server
+# FastAPI is the async web framework; uvicorn is its ASGI server
+# python-multipart is required for FastAPI to parse multipart/form-data (file uploads)
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Step 2: Medical imaging — DICOM and NIfTI processing (Step 2)
+# SimpleITK reads DICOM folders and converts to NIfTI format
+SimpleITK==2.3.1
+
+# Step 3: Segmentation pipeline (Step 3)
+# MONAI Deploy SDK wraps TotalSegmentator as a deployable inference app
+# monai-deploy-app-sdk==0.6.0  # uncomment when implementing Step 3
+# totalsegmentator==2.2.1       # uncomment when implementing Step 3
+
+# Step 4: Testing and linting
+# pytest runs the test suite; httpx is required by FastAPI's TestClient
+# ruff is the linter — fast Rust-based replacement for flake8 + isort
+pytest==8.2.0
+httpx==0.27.0
+ruff==0.4.4
